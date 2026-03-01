@@ -1,235 +1,134 @@
+# SETUP GUIDE FOR CLOUD POLICIES
 ---
 
-# GCP Console Setup Guide
+# 1. VM Setup with Auto Scaling
 
-Managed Instance Group + Auto-Scaling (80%) + Firewall + IAM
+## Step 1: Create Instance Template
 
----
-
-## Step 1 — Create / Select Project
-
-1. Go to: [https://console.cloud.google.com](https://console.cloud.google.com)
-2. Select your project (top navigation bar).
-3. Ensure **Billing is enabled**.
-
----
-
-## Step 2 — Create VPC Network
-
-1. Navigate to
-   **VPC Network → VPC networks**
-2. Click **Create VPC network**
-3. Choose:
-
-   * Name: `vm-network`
-   * Subnet creation mode: **Automatic**
-4. Click **Create**
-
-You now have a network with auto-created subnets.
-
----
-
-## Step 3 — Configure Firewall Rules
-
-Navigate to:
-
-**VPC Network → Firewall**
-
-### A. Allow ICMP
-
-1. Click **Create Firewall Rule**
-2. Name: `allow-icmp`
-3. Network: `vm-network`
-4. Direction: Ingress
-5. Action: Allow
-6. Targets: All instances in network
-7. Source IP ranges: `0.0.0.0/0`
-8. Protocols and ports:
-
-   * Select **Specified protocols**
-   * Check **ICMP**
-9. Click **Create**
-
----
-
-### B. Allow SSH (Port 22)
-
-1. Click **Create Firewall Rule**
-2. Name: `allow-ssh`
-3. Network: `vm-network`
-4. Direction: Ingress
-5. Action: Allow
-6. Targets: All instances
-7. Source IP ranges: `0.0.0.0/0`
-   (For production, restrict this.)
-8. Protocols and ports:
-
-   * Check **TCP**
-   * Enter port `22`
-9. Click **Create**
-
-All other ports remain blocked by default.
-
-Minimal attack surface achieved.
-
----
-
-## Step 4 — Create Instance Template
-
-Navigate to:
-
-**Compute Engine → Instance templates**
-
-1. Click **Create instance template**
+1. Open Google Cloud Console
+2. Navigate to: Compute Engine → Instance Templates
+3. Click Create Instance Template
 
 Configure:
 
-Basic:
+* Machine type: e2-medium (or as required)
+* Boot disk: Default OS image
+* Network: default VPC
+* Leave subnet as default (auto mode)
 
-* Name: `vm-template`
-* Region: your region
+Firewall:
 
-Machine:
+* Allow HTTP (if needed)
+* Allow HTTPS (if needed)
 
-* Series: E2
-* Machine type: `e2-medium` (or as required)
-
-Boot disk:
-
-* Change → Debian 12 (or Ubuntu)
-* Standard persistent disk
-
-Networking:
-
-* Network: `vm-network`
-* Subnet: Auto
-
-Leave everything else default unless needed.
-
-Click **Create**
-
-This template is your immutable VM blueprint.
+Click Create.
 
 ---
 
-## Step 5 — Create Managed Instance Group (MIG)
+## Step 2: Create Managed Instance Group
 
-Navigate to:
+1. Go to Compute Engine → Instance Groups
+2. Click Create Instance Group
+3. Select:
 
-**Compute Engine → Instance groups**
+   * Type: Managed
+   * Instance Template: Select the template created above
+   * Location: Single zone
 
-1. Click **Create instance group**
-2. Choose:
+Auto Scaling Configuration:
 
-   * Group type: **New managed instance group (stateless)**
-   * Name: `vm-mig`
-   * Location type: Zonal (or Regional if you prefer)
-   * Zone: choose one
-   * Instance template: `vm-template`
+* Minimum instances: 0
+* Maximum instances: 10
+* Autoscaling metric: CPU utilization
+* Target CPU utilization: 80%
 
-### Initial size:
+Create the instance group.
 
-Set to **0**
+Behavior:
 
-Click **Create**
-
-You now have a Managed Instance Group with zero instances running.
-
-Cloud minimalism.
+If CPU usage exceeds 80%, instances scale up.
+If usage drops, instances scale down (minimum 0).
 
 ---
 
-## Step 6 — Configure Auto-Scaling
+# 2. Network Firewall Policy (Geolocation-Based)
 
-Inside your instance group page:
+This uses Network Firewall Policies under Network Security.
 
-1. Click **Edit**
-2. Scroll to **Autoscaling**
-3. Select **On**
+## Step 1: Create Firewall Policy
+
+1. Go to Network Security → Firewall Policies
+2. Click Create Firewall Policy
+3. Name: india-geo-policy
+4. Create
+
+---
+
+## Step 2: Add Geolocation Rule 
+
+Open the created policy → Click Add Rule.
 
 Configure:
 
-* Autoscaling mode: **On: add and remove instances**
-* Minimum number of instances: **0**
-* Maximum number of instances: **10**
-* Autoscaling metric: **CPU utilization**
-* Target CPU utilization: **80%**
+General:
 
-Leave cooldown period default (or 60 seconds).
+* Priority: 1010
+* Direction: Ingress
+* Action: Allow
+* Enable rule
 
-Click **Save**
+Target:
 
-Now your MIG behaves like:
+* Target type: Instances
+* Apply to: All instances (or specific secure tag if used)
 
-If avg CPU > 80% → scale up
-If CPU low → scale down
-Can go down to zero.
+Source:
 
-Elastic computing unlocked.
+* Source network context: All network contexts
+* IP type: IPv4
+* Under Source filters → Geolocations
+* Select: India
 
----
+Create rule.
 
-## Step 7 — Configure Health Check
+This means:
 
-Navigate to:
-
-**Compute Engine → Health checks**
-
-1. Click **Create Health Check**
-2. Name: `vm-health-check`
-3. Protocol: HTTP (or TCP if no web server)
-4. Port: 80 (or relevant port)
-5. Leave defaults
-6. Click **Create**
-
-Now attach it:
-
-1. Go back to **Instance Groups**
-2. Click `vm-mig`
-3. Click **Edit**
-4. Under **Health check**, select `vm-health-check`
-5. Save
-
-Health checks ensure unhealthy VMs are replaced.
-
-Self-healing infrastructure — distributed Darwinism.
+If traffic originates from India → It is forwarded to a specific IP.
 
 ---
 
-## Step 8 — IAM Role Configuration
+# 3. Forwarding to Designated Destination IP
 
-Navigate to:
+Forwarding means traffic is directly delivered to the VM’s external IP.
 
-**IAM & Admin → IAM**
+Under the geolocation there is a destination IP , configure it to the address you want to send to.
 
-You need to ensure:
+Traffic Flow:
 
-Health Checker role:
+Internet
+↓
+Network Firewall Policy (Priority 1010 – India Allowed)
+↓
+VM External IP (Designated Destination)
+
+No mirroring is configured.
+
+---
+
+# 4. IAM Role Configuration
+
+Health Checker Role:
+
+Assign:
+
 Cloud Run Service Agent
 
-If not present:
+Steps:
 
-1. Click **Grant Access**
-2. In **New principals**, enter:
+1. Go to IAM & Admin → IAM
+2. Locate Cloud Run Service Agent
+3. Ensure required permissions are granted
 
-```
-service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com
-```
+Role: Health Checker 
 
-3. Role:
-   Search and select:
-   **Cloud Run Service Agent**
-4. Click **Save**
-
-This ensures health checking and related service communication works correctly.
-
----
-
-## Step 9 — Confirm Packet Mirroring is NOT Configured
-
-Navigate to:
-
-**VPC Network → Packet Mirroring**
-
-No entries should be present
 ---
